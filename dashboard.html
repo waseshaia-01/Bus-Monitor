@@ -5,136 +5,23 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Bus QR Monitor — Dashboard</title>
   <style>
-    :root { --maxw: 900px; }
-    body { font-family: system-ui, Arial, sans-serif; margin: 0; padding: 16px; line-height: 1.35; }
-    header { display: flex; justify-content: space-between; align-items: center; gap: 12px; max-width: var(--maxw); margin: 0 auto 14px; }
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
     h1 { font-size: 18px; margin: 0; }
-    a.btn, button.btn { padding: 10px 14px; border-radius: 10px; border: 1px solid #ddd; background:#f7f7f7; cursor:pointer; text-decoration: none; color:#111; }
-    main { max-width: var(--maxw); margin: 0 auto; }
+    a.btn { padding: 8px 14px; border-radius: 8px; background: #f0f0f0; text-decoration: none; color: #000; }
     .grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
-    .card { border:1px solid #e5e5e5; border-radius: 12px; padding: 12px; background: #fff; }
+    .card { border: 1px solid #ddd; border-radius: 8px; padding: 12px; background: #fff; }
     .card h3 { margin: 0 0 6px; font-size: 16px; }
-    .muted { color:#666; }
-    details { border:1px dashed #e3e3e3; border-radius: 12px; padding: 8px 10px; background:#fcfcfc; }
-    summary { cursor: pointer; font-weight: 600; }
-    table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-    th, td { text-align: left; border-bottom: 1px solid #eee; padding: 8px 6px; font-size: 14px; }
-    .row-actions { display:flex; gap:8px; }
+    details { margin-top: 8px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 6px; }
+    th, td { border-bottom: 1px solid #eee; padding: 6px; font-size: 14px; }
+    th { background: #f8f8f8; }
+    .muted { color: #666; font-size: 14px; }
   </style>
 
-  <!-- Firebase (ES modules) -->
-  <script type="module">
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-    import {
-      getFirestore, collection, doc, onSnapshot, query, orderBy
-    } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-
-    // --- Your Firebase config (as provided) ---
-    const firebaseConfig = {
-      apiKey: "AIzaSyCheUCoG-3z1OPkRAApPNO0S4AaBWW-WAc",
-      authDomain: "bus-monitor-c6973.firebaseapp.com",
-      projectId: "bus-monitor-c6973",
-      storageBucket: "bus-monitor-c6973.firebasestorage.app",
-      messagingSenderId: "858489773302",
-      appId: "1:858489773302:web:21872c4b9df745c497a0d7"
-    };
-
-    // Init
-    const app = initializeApp(firebaseConfig);
-    const db  = getFirestore(app);
-
-    const $ = (q) => document.querySelector(q);
-    const pad = (n) => n.toString().padStart(2, "0");
-    function tsToString(ts) {
-      try {
-        if (!ts) return "—";
-        const d = ts.toDate();
-        const y = d.getFullYear(), m = pad(d.getMonth()+1), day = pad(d.getDate());
-        const hh = pad(d.getHours()), mm = pad(d.getMinutes()), ss = pad(d.getSeconds());
-        return `${y}-${m}-${day} ${hh}:${mm}:${ss}`;
-      } catch { return "—"; }
-    }
-
-    // Render bus cards with live count
-    function renderBusCard(busId, data) {
-      const card = document.createElement("div");
-      card.className = "card";
-      card.innerHTML = `
-        <h3>${busId}</h3>
-        <div class="muted">Scanned (unique): <strong>${data?.numScanned ?? 0}</strong></div>
-        <details style="margin-top:10px;">
-          <summary>View scanned attendees</summary>
-          <div class="muted" style="margin:6px 0">Newest first</div>
-          <div class="table-wrap">
-            <table>
-              <thead><tr><th style="width:40%">Code</th><th>Raw</th><th style="width:170px">Last scanned</th></tr></thead>
-              <tbody id="tb-${busId.replaceAll(' ', '_')}"><tr><td colspan="3" class="muted">Loading…</td></tr></tbody>
-            </table>
-          </div>
-        </details>
-      `;
-      return card;
-    }
-
-    // Attach live listener for a bus's attendees when its details is toggled open
-    function attachDetailsListener(detailsEl, busId) {
-      let unsub = null;
-      detailsEl.addEventListener("toggle", () => {
-        if (detailsEl.open && !unsub) {
-          const tbodyId = `#tb-${busId.replaceAll(' ', '_')}`;
-          const tbody = document.querySelector(tbodyId);
-          const qy = query(collection(doc(db,"buses", busId), "attendees"), orderBy("lastScannedAt","desc"));
-          unsub = onSnapshot(qy, (snap) => {
-            tbody.innerHTML = "";
-            if (snap.empty) {
-              tbody.innerHTML = `<tr><td colspan="3" class="muted">No scans yet.</td></tr>`;
-              return;
-            }
-            snap.forEach((d) => {
-              const v = d.data();
-              const tr = document.createElement("tr");
-              tr.innerHTML = `
-                <td><code>${v.code || "—"}</code></td>
-                <td>${(v.raw || "").toString().slice(0,120)}</td>
-                <td>${tsToString(v.lastScannedAt)}</td>
-              `;
-              tbody.appendChild(tr);
-            });
-          });
-        } else if (!detailsEl.open && unsub) {
-          // stop listening when collapsed (saves bandwidth)
-          unsub(); unsub = null;
-        }
-      });
-    }
-
-    // Build Bus 1..12 cards and wire live count listeners
-    window.addEventListener("DOMContentLoaded", () => {
-      const grid = $(".grid");
-      const busIds = Array.from({length:12}, (_,i)=>`Bus ${i+1}`);
-
-      for (const busId of busIds) {
-        const card = renderBusCard(busId, { numScanned: 0 });
-        grid.appendChild(card);
-
-        // Count listener (listen to the single bus doc for realtime numScanned)
-        const busRef = doc(db, "buses", busId);
-        onSnapshot(busRef, (snap) => {
-          const data = snap.data() || { numScanned: 0 };
-          const h3 = card.querySelector("h3");
-          const muted = card.querySelector(".muted");
-          muted.innerHTML = `Scanned (unique): <strong>${data.numScanned ?? 0}</strong>`;
-          if (!snap.exists()) {
-            // keep the card, but it means no scans yet
-          }
-        });
-
-        // Hook details listener for attendee list
-        const detailsEl = card.querySelector("details");
-        attachDetailsListener(detailsEl, busId);
-      }
-    });
-  </script>
+  <!-- Firebase compat SDK -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
 </head>
 <body>
   <header>
@@ -145,5 +32,99 @@
   <main>
     <div class="grid" id="grid"></div>
   </main>
+
+  <script>
+    // --- Your Firebase config ---
+    const firebaseConfig = {
+      apiKey: "AIzaSyCheUCoG-3z1OPkRAApPNO0S4AaBWW-WAc",
+      authDomain: "bus-monitor-c6973.firebaseapp.com",
+      projectId: "bus-monitor-c6973",
+      storageBucket: "bus-monitor-c6973.firebasestorage.app",
+      messagingSenderId: "858489773302",
+      appId: "1:858489773302:web:21872c4b9df745c497a0d7"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+
+    const grid = document.getElementById("grid");
+
+    function pad(n) { return n.toString().padStart(2, "0"); }
+    function tsToString(ts) {
+      if (!ts) return "—";
+      const d = ts.toDate();
+      return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    }
+
+    function createBusCard(busId, data) {
+      const card = document.createElement("div");
+      card.className = "card";
+      card.innerHTML = `
+        <h3>${busId}</h3>
+        <div class="muted">Scanned (unique): <strong>${data?.numScanned ?? 0}</strong></div>
+        <details>
+          <summary>View scanned attendees</summary>
+          <div class="muted">Newest first</div>
+          <table>
+            <thead>
+              <tr><th>Code</th><th>Raw</th><th>Last scanned</th></tr>
+            </thead>
+            <tbody id="tb-${busId.replace(/\s+/g, '_')}">
+              <tr><td colspan="3" class="muted">Loading…</td></tr>
+            </tbody>
+          </table>
+        </details>
+      `;
+      return card;
+    }
+
+    function attachAttendeeListener(detailsEl, busId) {
+      let unsub = null;
+      detailsEl.addEventListener("toggle", () => {
+        if (detailsEl.open && !unsub) {
+          const tbody = document.getElementById(`tb-${busId.replace(/\s+/g, '_')}`);
+          unsub = db.collection("buses").doc(busId)
+            .collection("attendees")
+            .orderBy("lastScannedAt", "desc")
+            .onSnapshot((snap) => {
+              tbody.innerHTML = "";
+              if (snap.empty) {
+                tbody.innerHTML = `<tr><td colspan="3" class="muted">No scans yet.</td></tr>`;
+                return;
+              }
+              snap.forEach(doc => {
+                const v = doc.data();
+                const tr = document.createElement("tr");
+                tr.innerHTML = `
+                  <td>${v.code || "—"}</td>
+                  <td>${v.raw || ""}</td>
+                  <td>${tsToString(v.lastScannedAt)}</td>
+                `;
+                tbody.appendChild(tr);
+              });
+            });
+        } else if (!detailsEl.open && unsub) {
+          unsub();
+          unsub = null;
+        }
+      });
+    }
+
+    // Build all bus cards
+    const busIds = Array.from({ length: 12 }, (_, i) => `Bus ${i + 1}`);
+    busIds.forEach(busId => {
+      const card = createBusCard(busId, { numScanned: 0 });
+      grid.appendChild(card);
+
+      // Live count listener
+      db.collection("buses").doc(busId)
+        .onSnapshot(snap => {
+          const data = snap.data() || { numScanned: 0 };
+          card.querySelector(".muted").innerHTML = `Scanned (unique): <strong>${data.numScanned ?? 0}</strong>`;
+        });
+
+      // Attach attendee listener when opened
+      attachAttendeeListener(card.querySelector("details"), busId);
+    });
+  </script>
 </body>
 </html>
