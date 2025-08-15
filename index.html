@@ -5,32 +5,39 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Bus QR Monitor — Scanner</title>
   <style>
-    :root { --maxw: 720px; }
-    body { font-family: system-ui, Arial, sans-serif; margin: 0; padding: 16px; line-height: 1.35; }
-    header { display: flex; justify-content: space-between; align-items: center; gap: 12px; max-width: var(--maxw); margin: 0 auto 12px; }
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
     h1 { font-size: 18px; margin: 0; }
-    a.btn, button.btn { padding: 10px 14px; border-radius: 10px; border: 1px solid #ddd; background:#f7f7f7; cursor:pointer; text-decoration: none; color:#111; }
-    main { max-width: var(--maxw); margin: 0 auto; }
-    .row { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; margin: 10px 0 14px; }
-    select { padding: 10px; border-radius: 10px; border: 1px solid #ccc; }
-    #reader { width: 192px; height: 192px; margin: 0 auto; border: 2px dashed #bbb; border-radius: 14px; display: grid; place-items: center; }
-    .controls { display:flex; gap:10px; justify-content:center; margin: 12px 0; flex-wrap: wrap; }
-    .status { background:#f2f7ff; border:1px solid #d6e4ff; padding:12px; border-radius: 12px; font-size: 14px; }
-    .muted { color:#666; }
+    a.btn { padding: 8px 14px; border-radius: 8px; background: #f0f0f0; text-decoration: none; color: #000; }
+    label { font-weight: bold; }
+    select { padding: 8px; margin-bottom: 12px; width: 100%; }
+    #reader { width: 100%; max-width: 400px; margin: auto; }
+    #status { margin-top: 10px; font-weight: bold; color: green; }
   </style>
 
-  <!-- html5-qrcode -->
-  <script src="https://unpkg.com/html5-qrcode/minified/html5-qrcode.min.js"></script>
+  <!-- Firebase compat SDK -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
 
-  <!-- Firebase (ES modules) -->
-  <script type="module">
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-    import {
-      getFirestore, doc, getDoc, setDoc, runTransaction,
-      serverTimestamp, increment
-    } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+  <!-- QR Scanner Library -->
+  <script src="https://unpkg.com/html5-qrcode"></script>
+</head>
+<body>
+  <header>
+    <h1>Bus QR Monitor — Scanner</h1>
+    <a class="btn" href="./dashboard.html">View Dashboard</a>
+  </header>
 
-    // --- Your Firebase config (as provided) ---
+  <label for="bus">Select Bus:</label>
+  <select id="bus">
+    <option value="">-- Select Bus --</option>
+  </select>
+
+  <div id="reader"></div>
+  <div id="status">Idle</div>
+
+  <script>
+    // --- Your Firebase config ---
     const firebaseConfig = {
       apiKey: "AIzaSyCheUCoG-3z1OPkRAApPNO0S4AaBWW-WAc",
       authDomain: "bus-monitor-c6973.firebaseapp.com",
@@ -39,162 +46,66 @@
       messagingSenderId: "858489773302",
       appId: "1:858489773302:web:21872c4b9df745c497a0d7"
     };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
 
-    // Init
-    const app = initializeApp(firebaseConfig);
-    const db  = getFirestore(app);
+    const statusDiv = document.getElementById("status");
+    const busSelect = document.getElementById("bus");
 
-    // --- Helpers ---
-    const $ = (q) => document.querySelector(q);
-    const pad = (n) => n.toString().padStart(2, "0");
-    const fmtTime = (d) => {
-      const y = d.getFullYear(), m = pad(d.getMonth()+1), day = pad(d.getDate());
-      const hh = pad(d.getHours()), mm = pad(d.getMinutes()), ss = pad(d.getSeconds());
-      return `${y}-${m}-${day} ${hh}:${mm}:${ss}`;
-    };
-    // Firestore doc IDs cannot contain slashes. Keep it reversible enough.
-    const toDocId = (raw) => raw.replaceAll("/", "_slash_").trim().slice(0, 150);
-
-    // Ensure bus doc exists (so dashboard has something to read)
-    async function ensureBusDoc(busId) {
-      const busRef = doc(db, "buses", busId);
-      const snap = await getDoc(busRef);
-      if (!snap.exists()) {
-        await setDoc(busRef, {
-          busId,
-          numScanned: 0,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp()
-        }, { merge: true });
-      }
+    // Populate bus list
+    for (let i = 1; i <= 12; i++) {
+      const opt = document.createElement("option");
+      opt.value = `Bus ${i}`;
+      opt.textContent = `Bus ${i}`;
+      busSelect.appendChild(opt);
     }
 
-    // Save a scan (idempotent by attendee "code")
     async function saveScan(busId, rawCode) {
-      // Prepare
-      await ensureBusDoc(busId);
-      const docId  = toDocId(rawCode);
-      const attRef = doc(db, "buses", busId, "attendees", docId);
-      const busRef = doc(db, "buses", busId);
+      if (!busId) {
+        alert("Please select a bus first!");
+        return;
+      }
+      const docId = rawCode.replaceAll("/", "_slash_").trim().slice(0, 150);
+      const busRef = db.collection("buses").doc(busId);
+      const attRef = busRef.collection("attendees").doc(docId);
 
-      // Transaction: if new attendee, increment bus count; else bump count only
-      await runTransaction(db, async (tx) => {
+      await db.runTransaction(async (tx) => {
         const attSnap = await tx.get(attRef);
-        if (attSnap.exists()) {
+        if (attSnap.exists) {
           tx.update(attRef, {
-            count: increment(1),
-            lastScannedAt: serverTimestamp(),
+            count: firebase.firestore.FieldValue.increment(1),
+            lastScannedAt: firebase.firestore.FieldValue.serverTimestamp(),
             raw: rawCode
           });
-          // don't change numScanned (unique attendees)
-          tx.set(busRef, { updatedAt: serverTimestamp() }, { merge: true });
+          tx.update(busRef, { updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
         } else {
           tx.set(attRef, {
-            code: docId,       // normalized identifier
-            raw: rawCode,      // full string from QR
+            code: docId,
+            raw: rawCode,
             count: 1,
-            createdAt: serverTimestamp(),
-            lastScannedAt: serverTimestamp()
+            createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+            lastScannedAt: firebase.firestore.FieldValue.serverTimestamp()
           });
           tx.set(busRef, {
-            numScanned: increment(1),
-            updatedAt: serverTimestamp()
+            numScanned: firebase.firestore.FieldValue.increment(1),
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
           }, { merge: true });
         }
       });
-
-      return { id: docId };
+      statusDiv.textContent = `Saved: ${rawCode} to ${busId}`;
     }
 
-    // --- UI / Scanner ---
-    let html5Qr, scanning = false;
-
-    async function startScanner() {
-      if (scanning) return;
-      scanning = true;
-      $("#last").textContent = "—";
-      $("#status").textContent = "Initializing camera… If prompted, allow camera access.";
-      try {
-        html5Qr = new Html5Qrcode("reader");
-        const config = { fps: 10, qrbox: 192 /* ~2x2 inches on many phones */ };
-        await html5Qr.start({ facingMode: "environment" }, config, async (text) => {
-          // Debounce rapid duplicates by pausing briefly
-          await html5Qr.pause(true);
-          const busId = $("#bus").value;
-          $("#status").textContent = "Saving…";
-          try {
-            await saveScan(busId, text);
-            $("#last").textContent = text;
-            $("#lastTime").textContent = fmtTime(new Date());
-            $("#status").textContent = "Saved ✔";
-          } catch (e) {
-            console.error(e);
-            $("#status").textContent = "Error saving scan. Check connection.";
-          } finally {
-            // Resume after 1.2s to avoid double-reads
-            setTimeout(async () => {
-              try { await html5Qr.resume(); } catch (_) {}
-            }, 1200);
-          }
-        });
-      } catch (e) {
-        console.error(e);
-        $("#status").textContent = "Camera error. Make sure you're on HTTPS and allowed camera access.";
-        scanning = false;
-      }
+    // Scanner setup with Html5QrcodeScanner
+    function onScanSuccess(decodedText) {
+      const busId = busSelect.value;
+      saveScan(busId, decodedText).catch(err => {
+        console.error(err);
+        statusDiv.textContent = "Error saving scan.";
+      });
     }
 
-    async function stopScanner() {
-      if (!html5Qr || !scanning) return;
-      try { await html5Qr.stop(); await html5Qr.clear(); } catch (_) {}
-      scanning = false;
-      $("#status").textContent = "Scanner stopped.";
-    }
-
-    // Wire up
-    window.addEventListener("DOMContentLoaded", async () => {
-      // Build Bus 1..12
-      const sel = $("#bus");
-      for (let i = 1; i <= 12; i++) {
-        const o = document.createElement("option");
-        o.value = `Bus ${i}`;
-        o.textContent = `Bus ${i}`;
-        sel.appendChild(o);
-      }
-      // Pre-create initial bus doc to speed first save
-      await ensureBusDoc(sel.value);
-
-      $("#start").addEventListener("click", startScanner);
-      $("#stop").addEventListener("click", stopScanner);
-    });
+    const scanner = new Html5QrcodeScanner("reader", { fps: 10, qrbox: 250 });
+    scanner.render(onScanSuccess);
   </script>
-</head>
-<body>
-  <header>
-    <h1>Bus QR Monitor — Scanner</h1>
-    <a class="btn" href="./dashboard.html">View Dashboard</a>
-  </header>
-
-  <main>
-    <div class="row">
-      <label for="bus" class="muted">Select Bus</label>
-      <select id="bus" aria-label="Select Bus"></select>
-    </div>
-
-    <div id="reader"><span class="muted">2×2 in QR area</span></div>
-
-    <div class="controls">
-      <button id="start" class="btn">Start Scanner</button>
-      <button id="stop" class="btn">Stop</button>
-    </div>
-
-    <div class="status">
-      <div><strong>Status:</strong> <span id="status">Idle</span></div>
-      <div class="muted" style="margin-top:6px;">
-        <div>Last scanned code: <code id="last">—</code></div>
-        <div>Time: <span id="lastTime">—</span></div>
-      </div>
-    </div>
-  </main>
 </body>
 </html>
