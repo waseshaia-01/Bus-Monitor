@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Bus Monitor — Dashboard</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    header { display: flex; justify-content: space-between; align-items: center; }
+    h1 { font-size: 18px; margin: 0; }
+    a.btn { padding: 8px 14px; border: 1px solid #ddd; border-radius: 8px; text-decoration: none; color: #000; background: #f5f5f5; }
+    .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); margin-top: 14px; }
+    .card { border: 1px solid #eee; border-radius: 10px; padding: 12px; background:#fff; }
+    .muted { color:#666; }
+    details { margin-top: 8px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 6px; }
+    th, td { border-bottom: 1px solid #eee; padding: 6px; font-size: 14px; text-align: left; }
+    th { background: #fafafa; }
+    .pill { display:inline-block; padding:3px 8px; border-radius: 999px; font-size: 12px; }
+    .ok { background:#e7f9ee; border:1px solid #c8efd6; }
+    .no { background:#ffecec; border:1px solid #ffd1d1; }
+  </style>
+
+  <!-- Firebase compat SDK -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+</head>
+<body>
+  <header>
+    <h1>Bus Monitor — Dashboard</h1>
+    <div style="display:flex; gap:8px;">
+      <a class="btn" href="./upload.html">Upload/List</a>
+      <a class="btn" href="./scanner.html">Scanner</a>
+    </div>
+  </header>
+
+  <div class="grid" id="grid"></div>
+
+  <script>
+    // Firebase config
+    const firebaseConfig = {
+      apiKey: "AIzaSyCheUCoG-3z1OPkRAApPNO0S4AaBWW-WAc",
+      authDomain: "bus-monitor-c6973.firebaseapp.com",
+      projectId: "bus-monitor-c6973",
+      storageBucket: "bus-monitor-c6973.firebasestorage.app",
+      messagingSenderId: "858489773302",
+      appId: "1:858489773302:web:21872c4b9df745c497a0d7"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+
+    const grid = document.getElementById('grid');
+    const busIds = Array.from({length:12},(_,i)=>`Bus ${i+1}`);
+
+    function pad(n){ return n.toString().padStart(2,'0'); }
+    function ts(t){
+      if (!t) return '—';
+      const d = t.toDate ? t.toDate() : new Date(t);
+      return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    }
+
+    function makeCard(busId){
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.innerHTML = `
+        <h3 style="margin:0 0 6px">${busId}</h3>
+        <div class="muted"><span id="cnt-${busId.replace(/\s+/g,'_')}">Scanned 0 / Total 0</span></div>
+        <details>
+          <summary>View attendees</summary>
+          <div class="muted">Newest first</div>
+          <table>
+            <thead><tr><th>Code</th><th>Name</th><th>Status</th><th>Time</th></tr></thead>
+            <tbody id="tb-${busId.replace(/\s+/g,'_')}"><tr><td colspan="4" class="muted">Loading…</td></tr></tbody>
+          </table>
+        </details>
+      `;
+      return card;
+    }
+
+    function attachAttendees(detailsEl, busId){
+      let unsub = null;
+      detailsEl.addEventListener('toggle', () => {
+        if (detailsEl.open && !unsub) {
+          const tbody = document.getElementById(`tb-${busId.replace(/\s+/g,'_')}`);
+          unsub = db.collection('buses').doc(busId).collection('attendees')
+            .orderBy('scannedAt','desc').onSnapshot(snap => {
+              tbody.innerHTML = '';
+              if (snap.empty) {
+                tbody.innerHTML = `<tr><td colspan="4" class="muted">No attendees uploaded.</td></tr>`;
+                return;
+              }
+              snap.forEach(doc => {
+                const v = doc.data();
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                  <td>${v.code || ''}</td>
+                  <td>${v.name || ''}</td>
+                  <td>${v.scanned ? '<span class="pill ok">Scanned</span>' : '<span class="pill no">Not yet</span>'}</td>
+                  <td>${v.scannedAt ? ts(v.scannedAt) : '—'}</td>
+                `;
+                tbody.appendChild(tr);
+              });
+            });
+        } else if (!detailsEl.open && unsub) {
+          unsub(); unsub = null;
+        }
+      });
+    }
+
+    // Build cards and live counts (numScanned + total list)
+    busIds.forEach(busId => {
+      const card = makeCard(busId);
+      grid.appendChild(card);
+
+      // Live "Scanned" from bus doc (numScanned)
+      db.collection('buses').doc(busId).onSnapshot(snap => {
+        const scanned = (snap.exists && typeof snap.data().numScanned === 'number') ? snap.data().numScanned : 0;
+        // Total attendees listener (one-shot & updates)
+        db.collection('buses').doc(busId).collection('attendees').onSnapshot(listSnap => {
+          const total = listSnap.size || 0;
+          document.getElementById(`cnt-${busId.replace(/\s+/g,'_')}`).textContent = `Scanned ${scanned} / Total ${total}`;
+        });
+      });
+
+      attachAttendees(card.querySelector('details'), busId);
+    });
+  </script>
+</body>
+</html>
