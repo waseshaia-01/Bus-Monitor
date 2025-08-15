@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bus QR Monitor</title>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore.js"></script>
+  <script src="https://unpkg.com/html5-qrcode/minified/html5-qrcode.min.js"></script>
+</head>
+<body>
+  <h1>Bus QR Monitor</h1>
+  <select id="busSelect">
+    <option>Bus 1</option>
+    <option>Bus 2</option>
+    <option>Bus 3</option>
+  </select>
+  <div id="reader" style="width:300px;"></div>
+  <ul id="dashboard"></ul>
+
+  <script>
+    // 1. Firebase init
+    const firebaseConfig = {
+      apiKey: "XXXX",
+      authDomain: "yourproject.firebaseapp.com",
+      projectId: "yourproject"
+    };
+    const app = firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+
+    // 2. QR scanner setup
+    const html5QrCode = new Html5Qrcode("reader");
+    html5QrCode.start(
+      { facingMode: "environment" },
+      { fps: 10, qrbox: 250 },
+      qrCodeMessage => {
+        let bus = document.getElementById("busSelect").value;
+        db.collection("buses").doc(bus).collection("attendees")
+          .add({ code: qrCodeMessage, time: new Date() });
+      }
+    );
+
+    // 3. Dashboard listener
+    db.collection("buses").onSnapshot(snapshot => {
+      let dash = document.getElementById("dashboard");
+      dash.innerHTML = "";
+      snapshot.forEach(busDoc => {
+        dash.innerHTML += `<li>${busDoc.id} - ${busDoc.ref.collection("attendees").get().then(q => q.size)}</li>`;
+      });
+    });
+  </script>
+</body>
+</html>
